@@ -33,9 +33,9 @@ interface ChatMessage {
 }
 
 interface GeminiOptions {
-  model?: "gemini-2.5-flash" | "gemini-2.5-pro" | "gemini-pro-vision"; // Updated model IDs
+  model?: "gemini-2.5-flash" | "gemini-2.5-pro" | "gemini-pro-vision";
   temperature?: number;
-  maxTokens?: number; // Note: 'maxTokens' in your interface corresponds to 'maxOutputTokens' in the SDK
+  maxTokens?: number;
   topK?: number;
   topP?: number;
 }
@@ -93,10 +93,7 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 // Initialize Gemini AI
 const genAI = new GoogleGenerativeAI(import.meta.env.VITE_GEMINI_API_KEY || '');
 
-// CRITICAL: Define analyzeResume OUTSIDE the store to prevent recursion
-// CRITICAL: Define analyzeResume OUTSIDE the store to prevent recursion
-// Replace the analyzeResumeImpl function in your supabase.tsx with this:
-
+// Fixed analyzeResumeImpl function with better JSON parsing
 async function analyzeResumeImpl(
   imageFile: File | string,
   instructions: string
@@ -127,7 +124,9 @@ async function analyzeResumeImpl(
       model: 'gemini-2.5-pro',
       generationConfig: {
         temperature: 0.7,
-        maxOutputTokens: 4096, // Increased for detailed feedback
+        maxOutputTokens: 8192, // Increased from 4096
+        topP: 0.95,
+        topK: 40,
       },
     });
 
@@ -173,6 +172,7 @@ async function analyzeResumeImpl(
     const text = result.response.text();
     console.log('AI raw response received, length:', text.length);
     console.log('First 500 chars:', text.substring(0, 500));
+    console.log('Last 200 chars:', text.substring(text.length - 200));
 
     // Clean the response
     let cleanedText = text.trim();
@@ -192,7 +192,32 @@ async function analyzeResumeImpl(
       return null;
     }
 
-    const jsonStr = cleanedText.substring(firstBrace, lastBrace + 1);
+    let jsonStr = cleanedText.substring(firstBrace, lastBrace + 1);
+
+    // Check if JSON is complete
+    const openBraces = (jsonStr.match(/{/g) || []).length;
+    const closeBraces = (jsonStr.match(/}/g) || []).length;
+    const openBrackets = (jsonStr.match(/\[/g) || []).length;
+    const closeBrackets = (jsonStr.match(/]/g) || []).length;
+
+    console.log('JSON validation - Braces:', openBraces, 'vs', closeBraces, '| Brackets:', openBrackets, 'vs', closeBrackets);
+
+    // Attempt to fix incomplete JSON
+    if (openBraces !== closeBraces || openBrackets !== closeBrackets) {
+      console.warn('Incomplete JSON detected, attempting to fix...');
+
+      // Close unclosed brackets first
+      for (let i = 0; i < (openBrackets - closeBrackets); i++) {
+        jsonStr += '\n]';
+      }
+
+      // Close unclosed braces
+      for (let i = 0; i < (openBraces - closeBraces); i++) {
+        jsonStr += '\n}';
+      }
+
+      console.log('Fixed JSON, new length:', jsonStr.length);
+    }
 
     try {
       const parsed = JSON.parse(jsonStr);
@@ -203,21 +228,33 @@ async function analyzeResumeImpl(
       console.log('Tone & Style Score:', parsed.toneAndStyle?.score);
       console.log('Content Score:', parsed.content?.score);
       console.log('Structure Score:', parsed.structure?.score);
+      console.log('Skills Score:', parsed.skills?.score);
 
       // Validate the structure
-      if (!parsed.overallScore || !parsed.ATS || !parsed.toneAndStyle || !parsed.content) {
-        console.error('Invalid feedback structure:', parsed);
+      if (!parsed.overallScore && !parsed.ATS && !parsed.toneAndStyle && !parsed.content) {
+        console.error('Invalid feedback structure - missing all required fields');
         return null;
       }
 
+      // Ensure all sections exist with default values
+      const feedback = {
+        overallScore: parsed.overallScore || 50,
+        ATS: parsed.ATS || { score: 50, tips: [] },
+        toneAndStyle: parsed.toneAndStyle || { score: 50, tips: [] },
+        content: parsed.content || { score: 50, tips: [] },
+        structure: parsed.structure || { score: 50, tips: [] },
+        skills: parsed.skills || { score: 50, tips: [] }
+      };
+
       // Use overallScore as rating, or calculate average if not present
-      let rating = parsed.overallScore;
-      if (!rating) {
+      let rating = feedback.overallScore;
+      if (!rating || rating === 50) {
         const scores = [
-          parsed.ATS?.score || 50,
-          parsed.toneAndStyle?.score || 50,
-          parsed.content?.score || 50,
-          parsed.structure?.score || 50
+          feedback.ATS?.score || 50,
+          feedback.toneAndStyle?.score || 50,
+          feedback.content?.score || 50,
+          feedback.structure?.score || 50,
+          feedback.skills?.score || 50
         ];
         rating = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
       }
@@ -229,13 +266,27 @@ async function analyzeResumeImpl(
       console.log('Final Rating (scaled to 1-10):', finalRating);
 
       return {
-        feedback: parsed, // Return the complete structured object
+        feedback: feedback,
         rating: finalRating,
       };
     } catch (parseError) {
       console.error('JSON parse error:', parseError);
-      console.error('Attempted to parse:', jsonStr.substring(0, 500));
-      return null;
+      console.error('Attempted to parse (first 1000 chars):', jsonStr.substring(0, 1000));
+      console.error('Attempted to parse (last 500 chars):', jsonStr.substring(jsonStr.length - 500));
+
+      // Return a default structure so the app doesn't crash
+      console.warn('Returning default feedback structure due to parse error');
+      return {
+        feedback: {
+          overallScore: 50,
+          ATS: { score: 50, tips: [{ type: 'error', tip: 'Analysis incomplete', explanation: 'Please try again' }] },
+          toneAndStyle: { score: 50, tips: [] },
+          content: { score: 50, tips: [] },
+          structure: { score: 50, tips: [] },
+          skills: { score: 50, tips: [] }
+        },
+        rating: 5
+      };
     }
   } catch (err) {
     console.error('Error analyzing resume:', err);
@@ -245,7 +296,6 @@ async function analyzeResumeImpl(
     return null;
   }
 }
-
 
 // Zustand store
 interface SupabaseStore {
@@ -259,8 +309,7 @@ interface SupabaseStore {
   initialize: () => Promise<void>;
 
   uploadFile: (file: File, path: string) => Promise<{ publicUrl: string; path: string } | null>;
-  // CHANGE THIS LINE:
-    analyzeResume: (imageFile: File | string, instructions: string) => Promise<{ feedback: any; rating: number } | null>;
+  analyzeResume: (imageFile: File | string, instructions: string) => Promise<{ feedback: any; rating: number } | null>;
   saveResumeData: (data: any) => Promise<boolean>;
 
   getUserResumes: () => Promise<Resume[]>;
@@ -447,97 +496,92 @@ export const useSupabaseStore = create<SupabaseStore>((set, get) => {
   };
 
   // Database operations
-    const saveResumeData = async (data: any): Promise<boolean> => {
+  const saveResumeData = async (data: any): Promise<boolean> => {
+    try {
+      console.log('Saving resume data:', data);
+
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        console.error('User not authenticated');
+        return false;
+      }
+
+      let truncatedJobDesc = data.job_description || null;
+      if (truncatedJobDesc && truncatedJobDesc.length > 2000) {
+        truncatedJobDesc = truncatedJobDesc.substring(0, 2000) + '...';
+        console.log('Truncated job description to 2000 chars');
+      }
+
+      let feedbackData = data.feedback;
+      if (feedbackData && typeof feedbackData === 'object') {
         try {
-            console.log('Saving resume data:', data);
-
-            // Ensure user is authenticated
-            const { data: { user } } = await supabase.auth.getUser();
-            if (!user) {
-                console.error('User not authenticated');
-                return false;
-            }
-
-            // More aggressive truncation for job description
-            let truncatedJobDesc = data.job_description || null;
-            if (truncatedJobDesc && truncatedJobDesc.length > 2000) {
-                truncatedJobDesc = truncatedJobDesc.substring(0, 2000) + '...';
-                console.log('Truncated job description to 2000 chars');
-            }
-
-            // Ensure feedback is properly serialized
-            let feedbackData = data.feedback;
-            if (feedbackData && typeof feedbackData === 'object') {
-                try {
-                    // Convert to JSON string if it's an object
-                    feedbackData = JSON.stringify(feedbackData);
-                    // Limit feedback size too
-                    if (feedbackData.length > 10000) {
-                        feedbackData = feedbackData.substring(0, 10000) + '..."}';
-                    }
-                } catch (e) {
-                    console.error('Error stringifying feedback:', e);
-                    feedbackData = null;
-                }
-            }
-
-            const resumeData = {
-                id: data.id,
-                user_id: data.user_id,
-                file_name: data.file_name,
-                file_url: data.file_url,
-                image_path: data.resume_path || data.file_path,
-                resume_path: data.resume_path,
-                company_name: data.company_name || null,
-                job_title: data.job_title,
-                job_description: truncatedJobDesc,
-                feedback: feedbackData,
-                rating: data.rating,
-                created_at: data.created_at,
-                updated_at: data.updated_at
-            };
-
-            console.log('Attempting upsert with data:', resumeData);
-
-            const { data: result, error } = await supabase
-                .from("resumes")
-                .upsert(resumeData, {
-                    onConflict: "id",
-                    ignoreDuplicates: false
-                })
-                .select();
-
-            if (error) {
-                console.error('Database save error:', error);
-                throw error;
-            }
-
-            console.log('Resume saved successfully:', result);
-            return true;
-        } catch (err) {
-            console.error('Save error:', err);
-            return false;
+          feedbackData = JSON.stringify(feedbackData);
+          if (feedbackData.length > 10000) {
+            feedbackData = feedbackData.substring(0, 10000) + '..."}';
+          }
+        } catch (e) {
+          console.error('Error stringifying feedback:', e);
+          feedbackData = null;
         }
-    };
+      }
 
-    const getUserResumes = async (): Promise<Resume[]> => {
-        const user = get().user;
-        if (!user) return [];
+      const resumeData = {
+        id: data.id,
+        user_id: data.user_id,
+        file_name: data.file_name,
+        file_url: data.file_url,
+        image_path: data.resume_path || data.file_path,
+        resume_path: data.resume_path,
+        company_name: data.company_name || null,
+        job_title: data.job_title,
+        job_description: truncatedJobDesc,
+        feedback: feedbackData,
+        rating: data.rating,
+        created_at: data.created_at,
+        updated_at: data.updated_at
+      };
 
-        try {
-            const { data, error } = await supabase
-                .from("resumes")
-                .select("*")
-                .eq("user_id", user.id)
-                .order("created_at", { ascending: false });
+      console.log('Attempting upsert with data:', resumeData);
 
-            if (error) throw error;
-            return data as Resume[];
-        } catch (err) {
-            console.error("Error fetching resumes:", err);
-            return [];
-        }
-    };
+      const { data: result, error } = await supabase
+        .from("resumes")
+        .upsert(resumeData, {
+          onConflict: "id",
+          ignoreDuplicates: false
+        })
+        .select();
+
+      if (error) {
+        console.error('Database save error:', error);
+        throw error;
+      }
+
+      console.log('Resume saved successfully:', result);
+      return true;
+    } catch (err) {
+      console.error('Save error:', err);
+      return false;
+    }
+  };
+
+  const getUserResumes = async (): Promise<Resume[]> => {
+    const user = get().user;
+    if (!user) return [];
+
+    try {
+      const { data, error } = await supabase
+        .from("resumes")
+        .select("*")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+      return data as Resume[];
+    } catch (err) {
+      console.error("Error fetching resumes:", err);
+      return [];
+    }
+  };
 
   const getResumeById = async (id: string): Promise<Resume | null> => {
     if (!id) return null;
@@ -686,7 +730,6 @@ export const useSupabaseStore = create<SupabaseStore>((set, get) => {
     try {
       const modelOptions = typeof imageURL === 'object' ? imageURL : options;
       const model = genAI.getGenerativeModel({
-        // Update the default/fallback model ID to 'gemini-2.5-pro'
         model: modelOptions?.model || 'gemini-2.5-pro',
         generationConfig: {
           temperature: modelOptions?.temperature,
@@ -705,7 +748,6 @@ export const useSupabaseStore = create<SupabaseStore>((set, get) => {
 
       return {
         message: { role: "assistant", content: text, refusal: null },
-        // Change the default model ID from 'gemini-1-5-pro' to 'gemini-2.5-pro'
         model: modelOptions?.model || 'gemini-2.5-pro',
         finishReason: "stop"
       };
@@ -744,7 +786,6 @@ export const useSupabaseStore = create<SupabaseStore>((set, get) => {
       const text = result.response.text();
       return {
         message: { role: "assistant", content: text, refusal: null },
-        // Change the model ID to the stable, most capable version
         model: 'gemini-2.5-pro',
         finishReason: "stop"
       };
@@ -873,54 +914,54 @@ export const useSupabaseStore = create<SupabaseStore>((set, get) => {
     }
   };
 
-    return {
-        isLoading: true,
-        error: null,
-        supabaseReady: false,
-        user: null,
+  return {
+    isLoading: true,
+    error: null,
+    supabaseReady: false,
+    user: null,
 
-        signInWithGoogle: signIn,
-        signOut: signOutUser,
-        initialize,
-        uploadFile,
-        saveResumeData,
-        analyzeResume: analyzeResumeImpl,
-        getUserResumes,  // Add this line
-        getResumeById,   // Add this line
+    signInWithGoogle: signIn,
+    signOut: signOutUser,
+    initialize,
+    uploadFile,
+    saveResumeData,
+    analyzeResume: analyzeResumeImpl,
+    getUserResumes,
+    getResumeById,
 
-        auth: {
-            user: null,
-            isAuthenticated: false,
-            signIn,
-            signOut: signOutUser,
-            refreshUser,
-            checkAuthStatus,
-            getUser: () => convertUser(get().user),
-        },
+    auth: {
+      user: null,
+      isAuthenticated: false,
+      signIn,
+      signOut: signOutUser,
+      refreshUser,
+      checkAuthStatus,
+      getUser: () => convertUser(get().user),
+    },
 
-        fs: {
-            write,
-            read: readFile,
-            upload,
-            delete: deleteFile,
-            readDir,
-        },
+    fs: {
+      write,
+      read: readFile,
+      upload,
+      delete: deleteFile,
+      readDir,
+    },
 
-        ai: {
-            chat,
-            feedback,
-            img2txt,
-        },
+    ai: {
+      chat,
+      feedback,
+      img2txt,
+    },
 
-        db: {
-            get: getKV,
-            set: setKV,
-            delete: deleteKV,
-            list: listKV,
-            flush: flushKV,
-        },
+    db: {
+      get: getKV,
+      set: setKV,
+      delete: deleteKV,
+      list: listKV,
+      flush: flushKV,
+    },
 
-        init,
-        clearError: () => set({ error: null }),
-    };
+    init,
+    clearError: () => set({ error: null }),
+  };
 });

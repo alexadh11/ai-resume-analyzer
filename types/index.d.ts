@@ -1,6 +1,6 @@
 // index.d.ts - Type definitions for Supabase Resume Application
 
-interface Resume {
+export interface Resume {
   id: string;
   companyName?: string;
   jobTitle?: string;
@@ -12,13 +12,14 @@ interface Resume {
   userId?: string;
 }
 
-interface Feedback {
+export interface Feedback {
   overallScore: number;
   ATS: {
     score: number;
     tips: {
       type: "good" | "improve";
       tip: string;
+      explanation: string;
     }[];
   };
   toneAndStyle: {
@@ -56,7 +57,7 @@ interface Feedback {
 }
 
 // Supabase Database Types
-interface Database {
+export interface Database {
   public: {
     Tables: {
       resumes: {
@@ -119,7 +120,7 @@ interface Database {
 }
 
 // Resume Store Types
-interface ResumeStore {
+export interface ResumeStore {
   resumes: Resume[];
   currentResume: Resume | null;
   isLoading: boolean;
@@ -147,7 +148,7 @@ interface ResumeStore {
 }
 
 // Claude AI Response Types
-interface ClaudeFeedbackResponse {
+export interface ClaudeFeedbackResponse {
   overallScore: number;
   sections: {
     ATS: {
@@ -193,10 +194,10 @@ interface ClaudeFeedbackResponse {
 }
 
 // Supabase Storage Bucket Names
-type StorageBucket = 'resumes' | 'resume-images' | 'uploads';
+export type StorageBucket = 'resumes' | 'resume-images' | 'uploads';
 
 // Supabase RLS Policy Types
-interface RLSPolicies {
+export interface RLSPolicies {
   resumes: {
     select: 'authenticated users can view their own resumes';
     insert: 'authenticated users can create resumes';
@@ -206,7 +207,7 @@ interface RLSPolicies {
 }
 
 // Supabase Row Types (for conversion functions)
-interface SupabaseResumeRow {
+export interface SupabaseResumeRow {
   id: string;
   user_id: string;
   company_name: string | null;
@@ -219,20 +220,7 @@ interface SupabaseResumeRow {
 }
 
 // Function parameter types
-interface PrepareInstructionsParams {
+export interface PrepareInstructionsParams {
   jobTitle: string;
   jobDescription: string;
 }
-
-// Export all types
-export type {
-  Resume,
-  Feedback,
-  Database,
-  ResumeStore,
-  ClaudeFeedbackResponse,
-  StorageBucket,
-  RLSPolicies,
-  SupabaseResumeRow,
-  PrepareInstructionsParams
-};
