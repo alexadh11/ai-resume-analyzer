@@ -118,7 +118,7 @@ const Upload = () => {
         file_url: uploadedImage.publicUrl,
         resume_path: imagePath,
         company_name: companyName || null,
-        job_title: jobTitle,
+        job_title: jobTitle || 'General Position',
         job_description: jobDescription || null,
         feedback: null,
         rating: null,
@@ -139,7 +139,7 @@ const Upload = () => {
 
       const aiResult = await analyzeResume(
         imageFile.file,
-        prepareInstructions({ jobTitle, jobDescription })
+        prepareInstructions({ jobTitle: jobTitle || 'General Position', jobDescription: jobDescription || '' })
       );
 
       console.log('AI Result received:', aiResult);
@@ -197,23 +197,29 @@ const Upload = () => {
 
   const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const form = e.currentTarget.closest('form');
-    if (!form) return;
+    const form = e.currentTarget;
     const formData = new FormData(form);
 
-    const companyName = formData.get('company-name') as string;
-    const jobTitle = formData.get('job-title') as string;
-    const jobDescription = formData.get('job-description') as string;
+    const companyName = (formData.get('company-name') as string)?.trim() || '';
+    const jobTitle = (formData.get('job-title') as string)?.trim() || '';
+    const jobDescription = (formData.get('job-description') as string)?.trim() || '';
 
-    if (!file) return setStatusText('Please select a PDF file');
-    if (!jobTitle.trim()) return setStatusText('Please enter a job title');
+    // Validation: Only file and user are required
+    if (!file) {
+      setStatusText('Please select a PDF file');
+      return;
+    }
+
     if (!user) {
       setStatusText('Please log in to continue');
       navigate('/auth?next=/upload');
       return;
     }
 
+    // Clear any previous error messages
     setStatusText('');
+
+    // Proceed with analysis - job title and description are optional
     handleAnalyze({ companyName, jobTitle, jobDescription, file });
   };
 
@@ -247,15 +253,15 @@ const Upload = () => {
               className="flex flex-col gap-4 mt-8"
             >
               <div className="form-div">
-                <label htmlFor="company-name">Company Name</label>
+                <label htmlFor="company-name">Company Name (Optional)</label>
                 <input type="text" name="company-name" id="company-name" />
               </div>
               <div className="form-div">
-                <label htmlFor="job-title">Job Title *</label>
-                <input type="text" name="job-title" id="job-title" required />
+                <label htmlFor="job-title">Job Title (Optional)</label>
+                <input type="text" name="job-title" id="job-title" />
               </div>
               <div className="form-div">
-                <label htmlFor="job-description">Job Description</label>
+                <label htmlFor="job-description">Job Description (Optional)</label>
                 <textarea rows={5} name="job-description" id="job-description" />
               </div>
               <div className="form-div">
